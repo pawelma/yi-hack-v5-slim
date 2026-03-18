@@ -54,6 +54,31 @@ Everything else (httpd, mqttv4, crond, ftpd, onvif, telnetd, ntpd) is disabled.
    ```
 4. SSH access: `ssh root@<camera-ip>` (password: `root`).
 
+### Finding the RTSP stream on your network
+
+Since the web UI is disabled by default, you need another way to find the camera's IP address. Options:
+
+- **Check your router's DHCP client list** — look for a device with hostname `yitimi`.
+- **Use nmap to scan for RTSP on your subnet:**
+  ```
+  nmap -p 554 --open 192.168.1.0/24
+  ```
+- **If you have the Yi Home app** — open Camera Settings > Network Info > IP Address.
+
+Once you have the IP, verify the stream:
+```
+ffplay rtsp://<camera-ip>/ch0_0.h264
+```
+
+Or add it to your preferred RTSP client (tinyCam, Blue Iris, VLC, Frigate, etc.) using:
+
+| Stream | URL |
+| --- | --- |
+| High res (1080p/720p) | `rtsp://<camera-ip>/ch0_0.h264` |
+| Low res (360p) | `rtsp://<camera-ip>/ch0_1.h264` |
+
+> **Note:** The low-res stream is only available if `RTSP_STREAM` is set to `low` or `both` in `system.conf`. The slim default is `high` only.
+
 ### Re-enabling features
 
 Edit `/tmp/sd/yi-hack-v5/etc/system.conf` on the SD card and set any feature to `yes`. All upstream features still work — they are just disabled by default.
