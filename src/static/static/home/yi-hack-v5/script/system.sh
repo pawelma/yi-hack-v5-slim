@@ -88,15 +88,11 @@ if [ -f $YI_HACK_UPGRADE_PATH/yi-hack-v5/fw_upgrade_in_progress ]; then
     exit
 fi
 
-# Update cloudAPI_fake if necessary
-if [[ "$(grep -m 3 -n '' /home/app/cloudAPI_fake | tail -n 1 | cut -d ':' -f 2 | cut -c 3-)" != "$(grep -m 3 -n '' $YI_HACK_PREFIX/script/cloudAPI_fake | tail -n 1 | cut -d ':' -f 2 | cut -c 3-)" ]]; then
-  cp -f $YI_HACK_PREFIX/script/cloudAPI_fake /home/app/
-fi
-
-# Update cloudAPI if necessary
-if [[ "$(grep -m 3 -n '' /home/app/cloudAPI | tail -n 1 | cut -d ':' -f 2 | cut -c 3-)" != "$(grep -m 3 -n '' $YI_HACK_PREFIX/script/cloudAPI | tail -n 1 | cut -d ':' -f 2 | cut -c 3-)" ]]; then
-  cp -f $YI_HACK_PREFIX/script/cloudAPI /home/app/
-fi
+# Always update cloudAPI and cloudAPI_fake from the SD card to flash.
+# Previous versions used a brittle line-3 comparison that failed to detect
+# changes (e.g. the exec fix for process leak), leaving stale scripts on flash.
+cp -f $YI_HACK_PREFIX/script/cloudAPI /home/app/
+cp -f $YI_HACK_PREFIX/script/cloudAPI_fake /home/app/
 
 # Manual Wi-Fi config
 if [ -f /tmp/sd/recover/configure_wifi.cfg ]; then
