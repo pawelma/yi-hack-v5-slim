@@ -93,6 +93,7 @@ _The rest of this README is from the upstream yi-hack-v5 project._
 
 - [Features](#features)
 - [Supported cameras and Firmware Files](#supported-cameras-and-firmware-files)
+- [Multi-WiFi Network Support (Slim version only)](#multi-wifi-network-support-slim-version-only)
 - [Getting started](#getting-started)
 - [Unbrick your camera](#unbrick-your-camera)
 - [Acknowledgments](#acknowledgments)
@@ -121,6 +122,82 @@ This firmware will add the following features:
   - Snapshot feature
   - Proxychains-ng - _Disabled by default. Useful if the camera is region-locked._
   - The possibility to disable all the cloud features while keeping the RTSP stream.
+
+## Multi-WiFi Network Support (Slim version only)
+
+This feature allows the camera to automatically connect to one of several pre-configured WiFi networks. This is useful when using the camera as a portable monitoring device across multiple locations (e.g., with a power bank) -- the camera will automatically connect to whichever configured network is available, without requiring reconfiguration.
+
+### How it works
+
+When enabled, the hack replaces the stock single-network `wpa_supplicant` with one that reads a standard `wpa_supplicant.conf` containing multiple `network={}` blocks. Networks are tried in priority order (highest first). If the current network becomes unavailable, the built-in watchdog detects the connection loss and triggers `wpa_supplicant` to scan and reconnect to the next available network.
+
+### Setup
+
+1. **Enable the feature** by editing `/tmp/sd/yi-hack-v5/etc/system.conf` (on the SD card) and setting:
+
+   ```
+   WIFI_MULTI=yes
+   ```
+
+2. **Configure your networks** by editing the template file at `/tmp/sd/yi-hack-v5/etc/wpa_supplicant.conf` on the SD card:
+
+   ```conf
+   ctrl_interface=/var/run/wpa_supplicant
+   update_config=0
+
+   # Network 1 - highest priority (tried first)
+   network={
+       ssid="HomeNetwork"
+       psk="password1"
+       priority=3
+   }
+
+   # Network 2
+   network={
+       ssid="OfficeNetwork"
+       psk="password2"
+       priority=2
+   }
+
+   # Network 3 - lowest priority (tried last)
+   network={
+       ssid="CabinNetwork"
+       psk="password3"
+       priority=1
+   }
+   ```
+
+   Add as many `network={}` blocks as you need. Higher `priority` value = tried first.
+
+3. **Reboot the camera.** On startup, the hack will kill the stock `wpa_supplicant` and start a new one with your multi-network config.
+
+### Optional: use hashed passwords
+
+For better security, you can use hashed PSK values instead of plaintext passwords. On any Linux machine, run:
+
+```bash
+wpa_passphrase "YourSSID" "YourPassword"
+```
+
+Then use the generated hex string in place of the quoted password:
+
+```conf
+network={
+    ssid="HomeNetwork"
+    psk=a1b2c3d4e5f6...  # no quotes for hex PSK
+    priority=3
+}
+```
+
+### Logs
+
+Multi-WiFi connection events are logged to `/tmp/sd/wifi_multi.log` on the SD card. WiFi watchdog events are logged to `/tmp/sd/wd_rtsp.log`.
+
+### Fallback behavior
+
+- If `wpa_supplicant` fails to start with your config file, the script automatically falls back to the stock single-network connection (from the mtdblock2 flash).
+- If `WIFI_MULTI=no` (default) or the config file is missing, behavior is identical to the stock firmware -- no changes at all.
+- The primary network configured via the Yi Home app (stored in flash) still works as a fallback.
 
 ## Supported cameras and firmware files
 
