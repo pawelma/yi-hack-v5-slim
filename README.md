@@ -1,21 +1,93 @@
 <p align="center">
     <img height="200" src="https://raw.githubusercontent.com/alienatedsec/yi-hack-v5/master/imgs/yi-hack-v5-header.png">
 </p>
-<p align="center">
-    <a target="_blank" href="https://discord.gg/bsKncwvRU7">
-        <img src="https://img.shields.io/discord/825822449449828414?logo=discord" alt="Official Discord Server">
-    </a>
-    <a target="_blank" href="https://github.com/alienatedsec/yi-hack-v5/releases">
-        <img src="https://img.shields.io/github/downloads/alienatedsec/yi-hack-v5/total.svg" alt="Releases Downloads">
-    </a>
-</p>
 
-## Why this `YI-HACK-V5` firmware?
+## yi-hack-v5-slim
 
-The answer is simple: missing updates, RTSP, and not based on the latest stock firmware (which features improvements and new cool stuff).
-Besides, there were no updates to `yi-hack-v4`, and I am against that RTSP licensing model. I have contributed enough and will continue my work separately.
+A stripped-down fork of [alienatedsec/yi-hack-v5](https://github.com/alienatedsec/yi-hack-v5) optimized for dedicated RTSP cameras with minimal resource usage.
 
-I am slowly working on pre-release versions, and I can see lots of downloads, testing and contributions. A big thank you to the community.
+This fork is intended for Yi cameras used purely as RTSP IP cameras (e.g. with tinyCam, Blue Iris, Frigate, or Home Assistant), where cloud features, web UI, recording, and MQTT are not needed.
+
+### What changed from upstream
+
+**Bug fixes (resource exhaustion prevention):**
+- `cloudAPI` process leak when cloud is disabled — `cloudAPI_fake` spawned blocking NTP queries that piled up as zombie processes, exhausting RAM and CPU within ~1 hour
+- `mqttv4` launched unconditionally at startup even when `MQTT=no`, wasting 3.3MB of RAM
+- `mqttv4` watchdog spin-loop — watchdog tried to restart `mqttv4` every 2 seconds when MQTT was disabled
+- RTSP pipeline liveness probe — watchdog now checks that `h264grabber` has the FIFO fd open, catching broken data pipelines
+- Increased network socket buffers from 160KB to 512KB for RTSP streaming stability
+
+**Slim defaults (`system.conf`):**
+| Setting | Upstream | Slim |
+| --- | --- | --- |
+| `HTTPD` | yes | **no** |
+| `RTSP` | no | **yes** |
+| `DISABLE_CLOUD` | no | **yes** |
+| `SWAP_FILE` | no | **yes** |
+| `SSH_PASSWORD` | _(empty)_ | **root** |
+| `FREE_SPACE` | 10 | **0** |
+| `SPEAKER_AUDIO` | yes | **no** |
+| `SNAPSHOT` | yes | **no** |
+
+**Processes running in slim mode:**
+| Process | Purpose |
+| --- | --- |
+| `rmm` | Yi camera firmware (video capture/encoding) |
+| `dispatch` | IPC message bus (required by rmm) |
+| `cloud` | Shared memory provider (required by rmm) |
+| `h264grabber` | Reads video from shared memory, writes to FIFO |
+| `rRTSPServer` | RTSP server (live555-based) |
+| `wd_rtsp.sh` | Watchdog for RTSP stack |
+| `dropbear` | SSH server |
+| `wpa_supplicant` | WiFi |
+| `udhcpc` | DHCP client |
+
+Everything else (httpd, mqttv4, crond, ftpd, onvif, telnetd, ntpd) is disabled.
+
+### Quick start
+
+1. Follow the standard [yi-hack-v5 installation](#getting-started) using the files from [upstream releases](https://github.com/alienatedsec/yi-hack-v5/releases/tag/0.4.1).
+2. Replace the scripts on the SD card with the ones from this fork (the `yi-hack-v5/script/` and `yi-hack-v5/etc/` directories).
+3. Boot the camera. RTSP is available at:
+   ```
+   rtsp://<camera-ip>/ch0_0.h264
+   ```
+4. SSH access: `ssh root@<camera-ip>` (password: `root`).
+
+### Finding the RTSP stream on your network
+
+Since the web UI is disabled by default, you need another way to find the camera's IP address. Options:
+
+- **Check your router's DHCP client list** — look for a device with hostname `yitimi`.
+- **Use nmap to scan for RTSP on your subnet:**
+  ```
+  nmap -p 554 --open 192.168.1.0/24
+  ```
+- **If you have the Yi Home app** — open Camera Settings > Network Info > IP Address.
+
+Once you have the IP, verify the stream:
+```
+ffplay rtsp://<camera-ip>/ch0_0.h264
+```
+
+Or add it to your preferred RTSP client (tinyCam, Blue Iris, VLC, Frigate, etc.) using:
+
+| Stream | URL |
+| --- | --- |
+| High res (1080p/720p) | `rtsp://<camera-ip>/ch0_0.h264` |
+| Low res (360p) | `rtsp://<camera-ip>/ch0_1.h264` |
+
+> **Note:** The low-res stream is only available if `RTSP_STREAM` is set to `low` or `both` in `system.conf`. The slim default is `high` only.
+
+### Re-enabling features
+
+Edit `/tmp/sd/yi-hack-v5/etc/system.conf` on the SD card and set any feature to `yes`. All upstream features still work — they are just disabled by default.
+
+---
+
+_The rest of this README is from the upstream yi-hack-v5 project._
+
+---
 
 ## Table of Contents
 
