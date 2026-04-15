@@ -87,10 +87,19 @@ jobs:
           sudo docker cp "${CONTAINER_ID}:${TOOLCHAIN_IMAGE_PATH}" "${TOOLCHAIN_PATH}"
           docker rm "${CONTAINER_ID}"
 
-          echo "Toolchain installed at ${TOOLCHAIN_PATH}"
-          ls "${TOOLCHAIN_PATH}/bin/" | head -5
+          # Several build scripts (curl, wpa, etc.) use the short prefix
+          # "arm-hisiv300-linux-" without the "uclibcgnueabi" suffix.
+          # The official SDK installer creates these symlinks; replicate that here.
+          echo "Creating short-prefix symlinks..."
+          cd "${TOOLCHAIN_PATH}/bin"
+          for TOOL in *uclibcgnueabi*; do
+            SHORT=$(echo "$TOOL" | sed 's/-uclibcgnueabi//')
+            if [ ! -e "$SHORT" ]; then
+              sudo ln -s "$TOOL" "$SHORT"
+            fi
+          done
 
-          # Verify the compiler works
+          echo "Toolchain installed at ${TOOLCHAIN_PATH}"
           export PATH="${TOOLCHAIN_PATH}/bin:$PATH"
           arm-hisiv300-linux-uclibcgnueabi-gcc --version
 
