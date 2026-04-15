@@ -51,8 +51,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Initialize submodules
+        run: |
+          # Full (unshallow) clone of submodules is required because some
+          # upstreams (git.busybox.net) reject shallow fetches of specific commits
+          git submodule update --init --recursive
 
       - name: Install build dependencies
         run: |
