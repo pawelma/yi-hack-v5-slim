@@ -1,0 +1,308 @@
+# yi-hack-v5-slim Build & Release Workflow
+#
+# Builds firmware images for all 6 supported Yi camera models and optionally
+# creates a GitHub release with .tgz archives for each camera.
+#
+# NO MANUAL SETUP REQUIRED - everything is fetched automatically:
+#   - Cross-compiler: extracted from Docker Hub (stoneshen/arm-hisiv300-linux)
+#   - Stock firmware sysroot: extracted from upstream alienatedsec/yi-hack-v5 0.4.1 release
+#
+# =============================================================================
+# TRIGGERING
+# =============================================================================
+#
+# - Push a tag:  git tag 0.6.0 && git push origin 0.6.0  (builds + releases)
+# - Manual:      GitHub Actions UI -> "Run workflow" button
+#
+# =============================================================================
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create a GitHub release with firmware archives'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+env:
+  UPSTREAM_REPO: alienatedsec/yi-hack-v5
+  UPSTREAM_TAG: '0.4.1'
+  TOOLCHAIN_PATH: /opt/arm-hisiv300-linux
+  # Docker Hub image containing the HiSilicon arm-hisiv300-linux cross-compiler
+  TOOLCHAIN_IMAGE: stoneshen/arm-hisiv300-linux
+  # Path to the toolchain inside the Docker image
+  TOOLCHAIN_IMAGE_PATH: /home/hisi-linux/arm-hisiv300-linux
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            bison flex \
+            autoconf automake autotools-dev libtool \
+            libssl-dev zlib1g-dev \
+            rsync \
+            p7zip-full \
+            mtd-utils u-boot-tools \
+            yui-compressor libxml2-utils \
+            meson ninja-build \
+            python3-pip python3-setuptools \
+            wget curl git patch gawk
+
+          # Install jefferson for userspace JFFS2 extraction
+          pip3 install jefferson
+
+      - name: Extract HiSilicon toolchain from Docker Hub
+        run: |
+          echo "Pulling toolchain image: ${TOOLCHAIN_IMAGE}..."
+          docker pull "${TOOLCHAIN_IMAGE}"
+
+          echo "Extracting toolchain to ${TOOLCHAIN_PATH}..."
+          CONTAINER_ID=$(docker create "${TOOLCHAIN_IMAGE}")
+          sudo docker cp "${CONTAINER_ID}:${TOOLCHAIN_IMAGE_PATH}" "${TOOLCHAIN_PATH}"
+          docker rm "${CONTAINER_ID}"
+
+          echo "Toolchain installed at ${TOOLCHAIN_PATH}"
+          ls "${TOOLCHAIN_PATH}/bin/" | head -5
+
+          # Verify the compiler works
+          export PATH="${TOOLCHAIN_PATH}/bin:$PATH"
+          arm-hisiv300-linux-uclibcgnueabi-gcc --version
+
+      - name: Prepare sysroot from upstream release
+        run: |
+          set -e
+
+          declare -A CAMERAS
+          CAMERAS["yi_home"]="y18"
+          CAMERAS["yi_home_1080p"]="y20"
+          CAMERAS["yi_dome"]="v201"
+          CAMERAS["yi_dome_1080p"]="h20"
+          CAMERAS["yi_cloud_dome_1080p"]="y19"
+          CAMERAS["yi_outdoor"]="h30"
+
+          echo "========================================="
+          echo " Downloading upstream ${UPSTREAM_TAG} release"
+          echo "========================================="
+          mkdir -p /tmp/upstream
+
+          for CAMERA_NAME in "${!CAMERAS[@]}"; do
+            TGZ_URL="https://github.com/${UPSTREAM_REPO}/releases/download/${UPSTREAM_TAG}/${CAMERA_NAME}_${UPSTREAM_TAG}.tgz"
+            echo "  -> ${CAMERA_NAME}_${UPSTREAM_TAG}.tgz"
+            curl -fsSL "$TGZ_URL" -o "/tmp/upstream/${CAMERA_NAME}.tgz"
+          done
+
+          echo ""
+          echo "========================================="
+          echo " Extracting sysroot from firmware images"
+          echo "========================================="
+
+          for CAMERA_NAME in "${!CAMERAS[@]}"; do
+            CAMERA_ID="${CAMERAS[$CAMERA_NAME]}"
+            SYSROOT_DIR="sysroot/${CAMERA_NAME}"
+
+            echo ""
+            echo "--- ${CAMERA_NAME} (${CAMERA_ID}) ---"
+
+            # Extract the tgz
+            mkdir -p "/tmp/upstream/${CAMERA_NAME}"
+            tar xzf "/tmp/upstream/${CAMERA_NAME}.tgz" \
+              -C "/tmp/upstream/${CAMERA_NAME}" --strip-components=1
+
+            HOME_IMG="/tmp/upstream/${CAMERA_NAME}/home_${CAMERA_ID}"
+            ROOTFS_IMG="/tmp/upstream/${CAMERA_NAME}/rootfs_${CAMERA_ID}"
+
+            if [[ ! -f "$HOME_IMG" || ! -f "$ROOTFS_IMG" ]]; then
+              echo "  WARNING: Missing firmware images, skipping"
+              continue
+            fi
+
+            mkdir -p "${SYSROOT_DIR}/home"
+            mkdir -p "${SYSROOT_DIR}/rootfs"
+
+            # Strip 64-byte U-Boot header to get raw JFFS2
+            dd bs=64 skip=1 if="$HOME_IMG" of="/tmp/${CAMERA_NAME}_home.jffs2" 2>/dev/null
+            dd bs=64 skip=1 if="$ROOTFS_IMG" of="/tmp/${CAMERA_NAME}_rootfs.jffs2" 2>/dev/null
+
+            # Extract JFFS2 using jefferson (userspace, no kernel modules needed)
+            echo "  Extracting home partition..."
+            jefferson "/tmp/${CAMERA_NAME}_home.jffs2" \
+              -d "/tmp/${CAMERA_NAME}_home_extracted" -f 2>&1 | tail -1
+            cp -a "/tmp/${CAMERA_NAME}_home_extracted/." "${SYSROOT_DIR}/home/"
+
+            echo "  Extracting rootfs partition..."
+            jefferson "/tmp/${CAMERA_NAME}_rootfs.jffs2" \
+              -d "/tmp/${CAMERA_NAME}_rootfs_extracted" -f 2>&1 | tail -1
+            cp -a "/tmp/${CAMERA_NAME}_rootfs_extracted/." "${SYSROOT_DIR}/rootfs/"
+
+            echo "  Done: $(du -sh "${SYSROOT_DIR}" | cut -f1)"
+
+            # Clean up per-camera temp files
+            rm -rf "/tmp/${CAMERA_NAME}_home.jffs2" "/tmp/${CAMERA_NAME}_rootfs.jffs2"
+            rm -rf "/tmp/${CAMERA_NAME}_home_extracted" "/tmp/${CAMERA_NAME}_rootfs_extracted"
+          done
+
+          rm -rf /tmp/upstream
+
+          echo ""
+          echo "========================================="
+          echo " Sysroot summary"
+          echo "========================================="
+          du -sh sysroot/*/
+
+      - name: Compile all source modules
+        run: |
+          export PATH="${TOOLCHAIN_PATH}/bin:$PATH"
+          bash scripts/compile.sh
+
+      - name: Pack firmware for all cameras
+        run: |
+          export PATH="${TOOLCHAIN_PATH}/bin:$PATH"
+          sudo bash scripts/pack_fw.all.sh
+
+      - name: List build outputs
+        run: |
+          echo "=== Build outputs ==="
+          ls -lhR out/
+          echo ""
+          echo "=== Release archives ==="
+          find out/ -name "*.tgz" -exec ls -lh {} \;
+
+      - name: Upload firmware archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-all-cameras
+          path: out/*.tgz
+          retention-days: 30
+
+      - name: Upload SD card files
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-sd-card-files
+          path: |
+            out/*/yi-hack-v5/
+            out/*/home_*
+            out/*/rootfs_*
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: >-
+      startsWith(github.ref, 'refs/tags/')
+      || (github.event_name == 'workflow_dispatch'
+          && github.event.inputs.create_release == 'true')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout for VERSION file
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            VERSION
+          sparse-checkout-cone-mode: false
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-all-cameras
+          path: out/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="$(cat VERSION)-build.${{ github.run_number }}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+
+      - name: Create GitHub Release
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="${VERSION}"
+
+          # Collect all tgz files
+          ASSETS=()
+          while IFS= read -r -d '' TGZ; do
+            ASSETS+=("$TGZ")
+            echo "  Found: $TGZ ($(du -h "$TGZ" | cut -f1))"
+          done < <(find out/ -name "*.tgz" -print0)
+
+          if [[ ${#ASSETS[@]} -eq 0 ]]; then
+            echo "ERROR: No .tgz files found in out/"
+            find out/ -type f
+            exit 1
+          fi
+
+          echo "Total archives: ${#ASSETS[@]}"
+
+          # Create release body
+          printf '%s\n' \
+            "## yi-hack-v5-slim firmware release" \
+            "" \
+            "Pre-built firmware images for all supported Yi camera models." \
+            "" \
+            "### Download guide" \
+            "Download the \`.tgz\` file matching your camera model, extract it to the root" \
+            "of a FAT32-formatted microSD card, and flash by inserting into the camera." \
+            "" \
+            "### Supported cameras" \
+            "| Camera | Archive | Firmware files |" \
+            "|--------|---------|---------------|" \
+            "| Yi Home (720p) | \`yi_home_*.tgz\` | \`rootfs_y18\`, \`home_y18\` |" \
+            "| Yi 1080p Home | \`yi_home_1080p_*.tgz\` | \`rootfs_y20\`, \`home_y20\` |" \
+            "| Yi Dome (720p) | \`yi_dome_*.tgz\` | \`rootfs_v201\`, \`home_v201\` |" \
+            "| Yi 1080p Dome | \`yi_dome_1080p_*.tgz\` | \`rootfs_h20\`, \`home_h20\` |" \
+            "| Yi 1080p Cloud Dome | \`yi_cloud_dome_1080p_*.tgz\` | \`rootfs_y19\`, \`home_y19\` |" \
+            "| Yi Outdoor | \`yi_outdoor_*.tgz\` | \`rootfs_h30\`, \`home_h30\` |" \
+            "" \
+            "### Slim defaults" \
+            "- **RTSP**: enabled" \
+            "- **SSH**: enabled (password: \`root\`)" \
+            "- Web UI, MQTT, Cloud, FTP, Telnet, ONVIF: disabled by default" \
+            > /tmp/release-body.md
+
+          # Create or update the release
+          if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release ${TAG} exists, uploading assets..."
+            for ASSET in "${ASSETS[@]}"; do
+              gh release upload "${TAG}" "$ASSET" --clobber --repo "${{ github.repository }}"
+            done
+          else
+            echo "Creating release ${TAG}..."
+            gh release create "${TAG}" \
+              "${ASSETS[@]}" \
+              --repo "${{ github.repository }}" \
+              --title "yi-hack-v5-slim ${VERSION}" \
+              --notes-file /tmp/release-body.md
+          fi
+
+          echo ""
+          echo "Release URL: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
