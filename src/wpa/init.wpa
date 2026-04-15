@@ -27,6 +27,12 @@ tar -xf dbus-1.15.8.tar.xz
 tar zxf expat-2.5.0.tar.gz
 cp .config wpa_supplicant-2.10/wpa_supplicant
 
+# Fix hardcoded sysroot paths in .config — upstream had paths baked to the
+# original developer's machine (/home/dev/333hack/...).  Replace them with
+# the actual SCRIPT_DIR so the build works in any checkout location.
+sed -i "s|/home/dev/333hack/src/wpa/sysroot|${SCRIPT_DIR}/sysroot|g" \
+  wpa_supplicant-2.10/wpa_supplicant/.config
+
 #cp wpa_supplicant-2.10/wpa_supplicant/defconfig wpa_supplicant-2.10/wpa_supplicant/.config
 
 pushd openssl-1.1.1w
