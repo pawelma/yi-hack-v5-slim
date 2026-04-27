@@ -67,10 +67,6 @@ elif [ "$VAL" == "upgrade" ] ; then
             printf "Content-type: text/html\r\n\r\n"
             printf "No new firmware available."
             exit
-        elif [ "$BASELINE_VERSION" != "0.4.1" ]; then
-            printf "Content-type: text/html\r\n\r\n"
-            printf "Wrong baseline version"
-            exit
         fi
         
         wget https://github.com/pawelma/yi-hack-v5/releases/download/$LATEST_FW/${MODEL_SUFFIX}_${LATEST_FW}.tgz
